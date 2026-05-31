@@ -13,6 +13,9 @@
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore-compat.js"></script>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:#f8f9fb;min-height:100vh}
@@ -23,7 +26,7 @@
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const { useState, useEffect, useMemo } = React;
+const { useState, useEffect, useMemo, useRef } = React;
 
 const INCOME_CATEGORIES = ["Jualan","Dari Abi","Hadiah","Freelance","Lainnya"];
 const EXPENSE_CATEGORIES = ["Bensin","Wifi","Belajar","Hiburan","Belanja","Lainnya"];
@@ -86,6 +89,21 @@ const rangeTotal = (transactions,rangeKey,type) => {
   const start = rangeStart(todayDate,rangeKey);
   return transactions.filter(t=>t.type===type && parseIsoDate(t.tanggal) >= start).reduce((sum,t)=>sum+t.nominal,0);
 };
+
+const firebaseConfig = {
+   apiKey: "AIzaSyCGbQVLZcF2TFATM9iETmDShcCGZu8dZ_I",
+  authDomain: "aplikasi-keuangan-7f907.firebaseapp.com",
+  projectId: "aplikasi-keuangan-7f907",
+  storageBucket: "aplikasi-keuangan-7f907.firebasestorage.app",
+  messagingSenderId: "622531457284",
+  appId: "1:622531457284:web:b295f1bb75e502d83e2051",
+  measurementId: "G-1FBSPDXFV1"
+};
+
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
 const uid = () => Math.random().toString(36).slice(2,10);
 const load = (k,d) => { try { return JSON.parse(localStorage.getItem(k))??d; } catch { return d; } };
 const save = (k,v) => localStorage.setItem(k,JSON.stringify(v));
@@ -492,6 +510,32 @@ function Ekspor({ transactions, budgets, allocations }){
   );
 }
 
+function AuthScreen({mode,email,password,onEmailChange,onPasswordChange,onSubmit,onToggleMode,error}){
+  return (
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:20,background:"#f8f9fb"}}>
+      <div style={{width:"100%",maxWidth:420,background:"#fff",borderRadius:24,padding:28,border:"1px solid #e5e7eb"}}>
+        <div style={{marginBottom:24}}>
+          <div style={{fontSize:11,color:"#9ca3af",letterSpacing:1,textTransform:"uppercase",marginBottom:6}}>Dompet Saya</div>
+          <h1 style={{margin:0,fontSize:24,fontWeight:800,color:"#111"}}>{mode === "signIn" ? "Masuk ke Akun" : "Buat Akun Baru"}</h1>
+        </div>
+        <Field label="Email">
+          <input style={inputStyle} type="email" value={email} onChange={onEmailChange} placeholder="email@contoh.com" />
+        </Field>
+        <Field label="Password">
+          <input style={inputStyle} type="password" value={password} onChange={onPasswordChange} placeholder="Minimal 6 karakter" />
+        </Field>
+        {error && <div style={{fontSize:13,color:"#ef4444",marginBottom:14}}>{error}</div>}
+        <Btn style={{width:"100%"}} onClick={onSubmit}>{mode === "signIn" ? "Masuk" : "Daftar"}</Btn>
+        <div style={{marginTop:18,fontSize:13,color:"#6b7280"}}>
+          {mode === "signIn" ? "Belum punya akun? " : "Sudah punya akun? "}
+          <button onClick={onToggleMode} style={{background:"none",border:"none",color:"#16a34a",fontWeight:700,cursor:"pointer",padding:0}}>{mode === "signIn" ? "Daftar sekarang" : "Masuk di sini"}</button>
+        </div>
+        <div style={{marginTop:16,fontSize:12,color:"#9ca3af"}}>Data akan disimpan di akun dan bisa diakses dari perangkat lain setelah login.</div>
+      </div>
+    </div>
+  );
+}
+
 function App(){
   const [activeTab,setActiveTab]=useState("Dashboard");
   const [transactions,setTransactions]=useState(()=>load("keu_transactions",[]));
@@ -499,9 +543,99 @@ function App(){
   const [allocations,setAllocations]=useState(()=>load("keu_allocations",[]));
   const [modal,setModal]=useState(null);
 
+  const [user,setUser]=useState(null);
+  const [authMode,setAuthMode]=useState("signIn");
+  const [authEmail,setAuthEmail]=useState("");
+  const [authPassword,setAuthPassword]=useState("");
+  const [authLoading,setAuthLoading]=useState(true);
+  const [remoteLoaded,setRemoteLoaded]=useState(false);
+  const [savingRemote,setSavingRemote]=useState(false);
+  const [remoteError,setRemoteError]=useState("");
+  const saveTimer = useRef(null);
+
   useEffect(()=>save("keu_transactions",transactions),[transactions]);
   useEffect(()=>save("keu_budgets",budgets),[budgets]);
   useEffect(()=>save("keu_allocations",allocations),[allocations]);
+
+  useEffect(()=>{
+    const unsubscribe = auth.onAuthStateChanged(async u => {
+      setAuthLoading(true);
+      setRemoteError("");
+      setRemoteLoaded(false);
+      setUser(u);
+      if(u){
+        try {
+          const snap = await db.collection("users").doc(u.uid).get();
+          if(snap.exists){
+            const data = snap.data();
+            setTransactions(data.transactions || []);
+            setBudgets(data.budgets || {});
+            setAllocations(data.allocations || []);
+          }
+        } catch(err){
+          console.warn("Load user data failed:", err);
+          setRemoteError(err.message);
+        }
+      }
+      setRemoteLoaded(true);
+      setAuthLoading(false);
+    });
+    return ()=>unsubscribe();
+  },[]);
+
+  useEffect(()=>{
+    if(!user || !remoteLoaded) return;
+    if(saveTimer.current) clearTimeout(saveTimer.current);
+    setSavingRemote(true);
+    saveTimer.current = setTimeout(async () => {
+      try {
+        await db.collection("users").doc(user.uid).set({
+          transactions,
+          budgets,
+          allocations,
+          updated: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        setRemoteError("");
+      } catch(err){
+        console.warn("Save user data failed:", err);
+        setRemoteError(err.message);
+      }
+      setSavingRemote(false);
+    }, 700);
+    return ()=>{ if(saveTimer.current) clearTimeout(saveTimer.current); };
+  },[user, transactions, budgets, allocations, remoteLoaded]);
+
+  const handleSignOut = () => auth.signOut();
+  const handleAuthSubmit = async () => {
+    try {
+      setRemoteError("");
+      if(authMode === "signIn"){
+        await auth.signInWithEmailAndPassword(authEmail, authPassword);
+      } else {
+        await auth.createUserWithEmailAndPassword(authEmail, authPassword);
+      }
+    } catch(err){
+      console.warn("Authentication failed:", err);
+      setRemoteError(err.message);
+    }
+  };
+
+  if(authLoading){
+    return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:20,background:"#f8f9fb",color:"#374151"}}>Memuat akun...</div>;
+  }
+
+  if(!user){
+    return <AuthScreen
+      mode={authMode}
+      email={authEmail}
+      password={authPassword}
+      onEmailChange={e=>setAuthEmail(e.target.value)}
+      onPasswordChange={e=>setAuthPassword(e.target.value)}
+      onSubmit={handleAuthSubmit}
+      onToggleMode={()=>setAuthMode(m=>m==="signIn"?"register":"signIn")}
+      error={remoteError}
+    />;
+  }
 
   const addTransaction=data=>{
     const t={id:uid(),type:modal.type,...data};
@@ -516,10 +650,16 @@ function App(){
   return (
     <div style={{fontFamily:"'Segoe UI',system-ui,sans-serif",background:"#f8f9fb",minHeight:"100vh",maxWidth:480,margin:"0 auto"}}>
       <div style={{background:"#fff",padding:"16px 20px 12px",borderBottom:"1px solid #f0f0f0",position:"sticky",top:0,zIndex:50}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
           <div>
             <div style={{fontSize:11,color:"#9ca3af",letterSpacing:1,textTransform:"uppercase"}}>Keuangan Pribadi</div>
-            <h1 style={{margin:0,fontSize:20,fontWeight:800,color:"#111"}}>Dompet Saya 💚</h1>
+            <h1 style={{margin:0,fontSize:20,fontWeight:800,color:"#111"}}>Dompet Saya</h1>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4}}>
+            <div style={{fontSize:12,color:"#6b7280"}}>{user?.email}</div>
+            <div style={{fontSize:12,fontWeight:700,color:savingRemote?"#d97706":"#16a34a"}}>{savingRemote?"Menyimpan...":"Sinkronisasi aktif"}</div>
+            {remoteError&&<div style={{fontSize:12,color:"#ef4444"}}>{remoteError}</div>}
+            <Btn variant="ghost" style={{padding:"8px 12px",marginTop:4}} onClick={handleSignOut}>Keluar</Btn>
           </div>
         </div>
       </div>
@@ -544,7 +684,7 @@ function App(){
 
       {modal&&<Modal title={modal.editItem?(modal.type==="income"?"Edit Pemasukan":"Edit Pengeluaran"):(modal.type==="income"?"Tambah Pemasukan":"Tambah Pengeluaran")} onClose={()=>setModal(null)}>
         <div style={{display:"inline-block",padding:"4px 12px",borderRadius:99,background:modal.type==="income"?"#dcfce7":"#fee2e2",color:modal.type==="income"?"#15803d":"#dc2626",fontSize:12,fontWeight:600,marginBottom:16}}>
-          {modal.type==="income"?"💚 Pemasukan":"❤ Pengeluaran"}
+          {modal.type==="income"?" Pemasukan":" Pengeluaran"}
         </div>
         <TransactionForm type={modal.type} initial={modal.editItem} onSave={addTransaction}/>
       </Modal>}
